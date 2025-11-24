@@ -34,7 +34,10 @@ import {
   Home,
   Zap,
   Award,
-  GraduationCap
+  GraduationCap,
+  Wifi,
+  WifiOff,
+  CloudOff
 } from 'lucide-react';
 
 // --- Constants ---
@@ -167,14 +170,24 @@ interface DaySectionProps {
 // --- Components ---
 
 const App = () => {
-  // State
+  // Network Status State
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [showSyncToast, setShowSyncToast] = useState<{message: string, type: 'success' | 'warning'} | null>(null);
+
+  // Initialize state with priority to Offline Queue
   const [entries, setEntries] = useState<StudyEntry[]>(() => {
+    const queue = localStorage.getItem('study-planner-entries-queue');
+    if (queue) {
+      console.log('Loaded from offline queue');
+      return JSON.parse(queue);
+    }
     const saved = localStorage.getItem('study-planner-data-v2');
-    if (saved) return JSON.parse(saved);
-    return [];
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [goals, setGoals] = useState<SubjectGoal[]>(() => {
+    const queue = localStorage.getItem('study-planner-goals-queue');
+    if (queue) return JSON.parse(queue);
     const saved = localStorage.getItem('study-planner-goals');
     return saved ? JSON.parse(saved) : SUBJECTS.map(s => ({
       subject: s,
@@ -182,6 +195,15 @@ const App = () => {
       actualScore: undefined,
       todos: []
     }));
+  });
+
+  // Persistent User Identity
+  const [userId] = useState(() => {
+    const saved = localStorage.getItem('study-planner-user-id');
+    if (saved) return saved;
+    const newId = crypto.randomUUID();
+    localStorage.setItem('study-planner-user-id', newId);
+    return newId;
   });
 
   const [userName, setUserName] = useState(() => localStorage.getItem('study-planner-username') || '自分');
@@ -202,15 +224,54 @@ const App = () => {
   // Wake Lock Ref
   const wakeLockRef = useRef<any>(null);
 
-  // Persist to LocalStorage
+  // --- Network Listeners ---
   useEffect(() => {
-    localStorage.setItem('study-planner-data-v2', JSON.stringify(entries));
-  }, [entries]);
+    const handleOnline = () => {
+      setIsOnline(true);
+      setShowSyncToast({ message: "オンラインに復帰しました。データを同期しました。", type: 'success' });
+      setTimeout(() => setShowSyncToast(null), 3000);
+    };
 
+    const handleOffline = () => {
+      setIsOnline(false);
+      setShowSyncToast({ message: "オフラインです。変更はキューに保存されます。", type: 'warning' });
+      setTimeout(() => setShowSyncToast(null), 3000);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // --- Persistence & Sync Logic ---
+  
+  // Entries Persistence
   useEffect(() => {
-    localStorage.setItem('study-planner-goals', JSON.stringify(goals));
-  }, [goals]);
+    if (isOnline) {
+      // Online: Save to main storage AND clear queue
+      localStorage.setItem('study-planner-data-v2', JSON.stringify(entries));
+      localStorage.removeItem('study-planner-entries-queue');
+    } else {
+      // Offline: Save to queue only (Snapshot)
+      localStorage.setItem('study-planner-entries-queue', JSON.stringify(entries));
+    }
+  }, [entries, isOnline]);
 
+  // Goals Persistence
+  useEffect(() => {
+    if (isOnline) {
+      localStorage.setItem('study-planner-goals', JSON.stringify(goals));
+      localStorage.removeItem('study-planner-goals-queue');
+    } else {
+      localStorage.setItem('study-planner-goals-queue', JSON.stringify(goals));
+    }
+  }, [goals, isOnline]);
+
+  // User & Friends Persistence
   useEffect(() => {
     localStorage.setItem('study-planner-username', userName);
   }, [userName]);
@@ -404,6 +465,7 @@ const App = () => {
   // Friend Actions
   const addFriend = (friendData: FriendStats) => {
     setFriends(prev => {
+      // Remove friend if they already exist (update them), then add new data
       const filtered = prev.filter(f => f.id !== friendData.id);
       return [...filtered, friendData].sort((a, b) => b.totalMinutes - a.totalMinutes);
     });
@@ -430,6 +492,11 @@ const App = () => {
   // --- Gemini AI Integration (Advice) ---
 
   const getAiAdvice = async () => {
+    if (!isOnline) {
+      setAiAdvice("オフラインのためAIコーチは利用できません。ネットワーク接続を確認してください。");
+      setShowAiModal(true);
+      return;
+    }
     if (!process.env.API_KEY) {
       setAiAdvice("API Key is missing. Cannot generate advice.");
       setShowAiModal(true);
@@ -488,6 +555,14 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-12">
+      {/* Network Status Toast */}
+      {showSyncToast && (
+        <div className={`fixed top-20 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center space-x-2 animate-in fade-in slide-in-from-top-2 ${showSyncToast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-amber-500 text-white'}`}>
+           {showSyncToast.type === 'success' ? <Wifi className="w-5 h-5" /> : <CloudOff className="w-5 h-5" />}
+           <span className="font-bold text-sm">{showSyncToast.message}</span>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-indigo-700 text-white p-4 shadow-lg sticky top-0 z-20">
         <div className="max-w-5xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4 md:gap-0">
@@ -495,57 +570,64 @@ const App = () => {
             <BookOpen className="w-6 h-6" />
             <h1 className="text-xl font-bold">定期考査学習管理 <span className="text-xs font-normal opacity-80 ml-2">11/27~12/9</span></h1>
           </div>
-          <div className="flex space-x-1 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-hide">
-            <button 
-              onClick={() => setActiveTab('home')}
-              className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'home' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
-            >
-              <Home className="w-4 h-4" />
-              <span>ホーム</span>
-            </button>
-             <button 
-              onClick={() => setActiveTab('goals')}
-              className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'goals' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
-            >
-              <Target className="w-4 h-4" />
-              <span>目標・ToDo</span>
-            </button>
-            <button 
-              onClick={() => setActiveTab('plan')}
-              className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'plan' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
-            >
-              <Calendar className="w-4 h-4" />
-              <span>スケジュール</span>
-            </button>
-            <button 
-              onClick={() => setActiveTab('stats')}
-              className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'stats' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              <span>分析</span>
-            </button>
-            <button 
-              onClick={() => setActiveTab('group')}
-              className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'group' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
-            >
-              <Users className="w-4 h-4" />
-              <span>グループ</span>
-            </button>
-            <button 
-              onClick={() => setActiveTab('analyze')}
-              className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'analyze' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
-            >
-              <ScanEye className="w-4 h-4" />
-              <span>画像分析</span>
-            </button>
-            <div className="w-px h-6 bg-indigo-500 mx-1 hidden md:block"></div>
-            <button
-              onClick={getAiAdvice}
-              className="flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-bold bg-amber-400 text-indigo-900 hover:bg-amber-300 transition shadow-sm whitespace-nowrap"
-            >
-              <BrainCircuit className="w-4 h-4" />
-              <span>AIコーチ</span>
-            </button>
+          <div className="flex items-center space-x-2">
+            <div className="flex space-x-1 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-hide">
+              <button 
+                onClick={() => setActiveTab('home')}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'home' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
+              >
+                <Home className="w-4 h-4" />
+                <span>ホーム</span>
+              </button>
+               <button 
+                onClick={() => setActiveTab('goals')}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'goals' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
+              >
+                <Target className="w-4 h-4" />
+                <span>目標・ToDo</span>
+              </button>
+              <button 
+                onClick={() => setActiveTab('plan')}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'plan' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
+              >
+                <Calendar className="w-4 h-4" />
+                <span>スケジュール</span>
+              </button>
+              <button 
+                onClick={() => setActiveTab('stats')}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'stats' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
+              >
+                <BarChart3 className="w-4 h-4" />
+                <span>分析</span>
+              </button>
+              <button 
+                onClick={() => setActiveTab('group')}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'group' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
+              >
+                <Users className="w-4 h-4" />
+                <span>グループ</span>
+              </button>
+              <button 
+                onClick={() => setActiveTab('analyze')}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${activeTab === 'analyze' ? 'bg-white text-indigo-700' : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
+              >
+                <ScanEye className="w-4 h-4" />
+                <span>画像分析</span>
+              </button>
+              <div className="w-px h-6 bg-indigo-500 mx-1 hidden md:block"></div>
+              <button
+                onClick={getAiAdvice}
+                className="flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-bold bg-amber-400 text-indigo-900 hover:bg-amber-300 transition shadow-sm whitespace-nowrap"
+              >
+                <BrainCircuit className="w-4 h-4" />
+                <span>AIコーチ</span>
+              </button>
+            </div>
+            
+            {/* Status Icon */}
+            <div className="hidden md:flex items-center justify-center w-8 h-8 rounded-full bg-indigo-800" title={isOnline ? "オンライン" : "オフライン (キュー保存中)"}>
+              {isOnline ? <Wifi className="w-4 h-4 text-emerald-400" /> : <WifiOff className="w-4 h-4 text-slate-400" />}
+            </div>
           </div>
         </div>
       </header>
@@ -619,6 +701,7 @@ const App = () => {
 
         {activeTab === 'group' && (
           <GroupView 
+            userId={userId}
             userName={userName}
             setUserName={setUserName}
             summary={summary}
@@ -1504,6 +1587,7 @@ const AnalyticsView = ({ entries, goals }: { entries: StudyEntry[], goals: Subje
 // --- Group / Share View ---
 
 const GroupView = ({ 
+  userId,
   userName, 
   setUserName, 
   summary, 
@@ -1512,6 +1596,7 @@ const GroupView = ({
   onAddFriend,
   onRemoveFriend
 }: { 
+  userId: string,
   userName: string, 
   setUserName: (n: string) => void,
   summary: any,
@@ -1523,9 +1608,9 @@ const GroupView = ({
   const [friendCodeInput, setFriendCodeInput] = useState("");
   const [showCopySuccess, setShowCopySuccess] = useState(false);
 
-  // Generate My Share Code
+  // Generate My Share Code based on Persistent User ID and Current Stats
   const myData: FriendStats = {
-    id: useMemo(() => crypto.randomUUID(), []), // Stable ID for session
+    id: userId, 
     name: userName,
     totalMinutes: summary.totalActual,
     goalsMetCount: goals.filter(g => g.todos.length > 0 && g.todos.every(t => t.isDone)).length, // Simple metric
@@ -1554,7 +1639,7 @@ const GroupView = ({
       if (!data.id || !data.name) throw new Error("Invalid Data");
       onAddFriend(data);
       setFriendCodeInput("");
-      alert(`${data.name}さんを追加しました！`);
+      alert(`${data.name}さんを追加・更新しました！`);
     } catch (e) {
       alert("無効な共有コードです。");
     }
@@ -1602,7 +1687,10 @@ const GroupView = ({
             </div>
 
             <div className="w-full md:w-auto flex flex-col items-center justify-center p-4 bg-indigo-50 rounded-xl border border-indigo-100">
-              <p className="text-xs text-indigo-800 font-bold mb-2">友達にデータを共有</p>
+              <p className="text-xs text-indigo-800 font-bold mb-2 flex items-center">
+                 友達にデータを共有
+                 <span className="ml-1 text-[9px] font-normal text-indigo-400 bg-indigo-50 px-1 py-0.5 rounded border border-indigo-100">自動更新</span>
+              </p>
               <div className="flex items-center space-x-2 w-full">
                 <input 
                   readOnly 
@@ -1617,7 +1705,9 @@ const GroupView = ({
                   <span className="text-xs font-bold">{showCopySuccess ? '完了' : 'コードをコピー'}</span>
                 </button>
               </div>
-              <p className="text-[10px] text-indigo-400 mt-2 text-center">このコードを友達に送って、登録してもらいましょう。</p>
+              <p className="text-[10px] text-indigo-400 mt-2 text-center max-w-[200px]">
+                このコードには現在の学習状況が含まれています。最新の状況を友達に送ると、友達側の表示も更新されます。
+              </p>
             </div>
           </div>
         </div>
@@ -1634,12 +1724,12 @@ const GroupView = ({
           </h3>
           <div className="space-y-2">
             {leaderboard.map((member, idx) => (
-              <div key={member.id} className={`flex items-center p-3 rounded-lg ${member.id === myData.id ? 'bg-indigo-50 border border-indigo-100' : 'bg-white border border-slate-100'}`}>
+              <div key={member.id} className={`flex items-center p-3 rounded-lg ${member.id === userId ? 'bg-indigo-50 border border-indigo-100' : 'bg-white border border-slate-100'}`}>
                 <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold mr-3 ${idx === 0 ? 'bg-amber-100 text-amber-600' : idx === 1 ? 'bg-slate-100 text-slate-600' : idx === 2 ? 'bg-orange-100 text-orange-600' : 'bg-slate-50 text-slate-400'}`}>
                   {idx + 1}
                 </div>
                 <div className="flex-1">
-                  <p className={`text-sm font-bold ${member.id === myData.id ? 'text-indigo-700' : 'text-slate-700'}`}>{member.name} {member.id === myData.id && '(あなた)'}</p>
+                  <p className={`text-sm font-bold ${member.id === userId ? 'text-indigo-700' : 'text-slate-700'}`}>{member.name} {member.id === userId && '(あなた)'}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-bold text-slate-800">{(member.totalMinutes / 60).toFixed(1)}h</p>
@@ -1653,10 +1743,10 @@ const GroupView = ({
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col">
           <h3 className="font-bold text-slate-800 mb-4 flex items-center">
             <UserPlus className="w-5 h-5 text-emerald-500 mr-2" />
-            メンバーを追加
+            メンバーを追加・更新
           </h3>
           <p className="text-sm text-slate-500 mb-4">
-            友達から送られてきた「共有コード」を入力して、学習状況を共有しましょう。
+            友達から送られてきた「共有コード」を入力して、学習状況を共有・更新しましょう。
           </p>
           
           <div className="space-y-3 mt-auto">
@@ -1671,7 +1761,7 @@ const GroupView = ({
               disabled={!friendCodeInput}
               className={`w-full py-2 rounded-lg font-bold text-white transition ${!friendCodeInput ? 'bg-slate-300 cursor-not-allowed' : 'bg-emerald-500 hover:bg-emerald-600'}`}
             >
-              追加する
+              追加 / 更新する
             </button>
           </div>
 
