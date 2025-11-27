@@ -39,6 +39,7 @@ import {
   WifiOff,
   CloudOff
 } from 'lucide-react';
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 // --- Constants ---
 
@@ -497,7 +498,7 @@ const App = () => {
       setShowAiModal(true);
       return;
     }
-    if (!process.env.API_KEY) {
+    if (!GEMINI_API_KEY) {
       setAiAdvice("API Key is missing. Cannot generate advice.");
       setShowAiModal(true);
       return;
@@ -508,7 +509,7 @@ const App = () => {
     setAiAdvice("");
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
       
       const planSummary = entries.map(e => 
         `${e.dateStr}: ${e.subject} - ${e.content} (Plan: ${e.plannedMinutes}min, Actual: ${e.actualMinutes}min)`
@@ -1820,11 +1821,11 @@ const ImageAnalysisView = () => {
   };
 
   const analyzeImage = async () => {
-    if (!selectedImage || !process.env.API_KEY) return;
+    if (!selectedImage || !GEMINI_API_KEY) return;
 
     setLoading(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
       // Extract base64 data from data URL
       const base64Data = selectedImage.split(',')[1];
 
