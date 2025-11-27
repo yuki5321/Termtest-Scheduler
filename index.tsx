@@ -39,8 +39,41 @@ import {
   WifiOff,
   CloudOff
 } from 'lucide-react';
+
+// 🔽 このブロックを追加（バージョン番号は揃えてください）
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  onAuthStateChanged,
+  signOut
+} from "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc
+} from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
+// Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyDAi3fYPBaEoP0TBckL9Fw2OrKZTQoGZbs",
+  authDomain: "termtest-scheduler.firebaseapp.com",
+  projectId: "termtest-scheduler",
+  storageBucket: "termtest-scheduler.firebasestorage.app",
+  messagingSenderId: "483024406130",
+  appId: "1:483024406130:web:f00dedca136c3110c2e4eb",
+  measurementId: "G-5H1TLBM914"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+// 🔽 ここを追加
+const auth = getAuth(app);
+const db   = getFirestore(app);
 // --- Constants ---
 
 const SUBJECTS = [
@@ -175,6 +208,32 @@ const App = () => {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [showSyncToast, setShowSyncToast] = useState<{message: string, type: 'success' | 'warning'} | null>(null);
 
+  // 🔽 Firebase Auth 状態
+  const [firebaseUser, setFirebaseUser] = useState<any | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  // 🔽 追加：Firestore からの初回ロードが終わったかどうか
+  const [hasLoadedFromFirestore, setHasLoadedFromFirestore] = useState(false);
+  const handleLogin = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      // 成功すると onAuthStateChanged が発火して firebaseUser がセットされる
+    } catch (err) {
+      console.error(err);
+      alert("ログインに失敗しました。もう一度試してください。");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error(err);
+      alert("ログアウトに失敗しました。");
+    }
+  };
+
+
   // Initialize state with priority to Offline Queue
   const [entries, setEntries] = useState<StudyEntry[]>(() => {
     const queue = localStorage.getItem('study-planner-entries-queue');
@@ -206,6 +265,9 @@ const App = () => {
     localStorage.setItem('study-planner-user-id', newId);
     return newId;
   });
+
+  // 🔽 Firebase ログイン中なら uid を優先する
+  const effectiveUserId = firebaseUser?.uid || userId;
 
   const [userName, setUserName] = useState(() => localStorage.getItem('study-planner-username') || '自分');
   const [friends, setFriends] = useState<FriendStats[]>(() => {
@@ -248,6 +310,58 @@ const App = () => {
     };
   }, []);
 
+   // Firebase Auth 監視
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      setAuthLoading(false);
+      if (!user) {
+        // ログアウト時は Firestore 初期ロード済みフラグを戻す
+        setHasLoadedFromFirestore(false);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 🔽 8-3: ログインしたら Firestore からデータを 1 回読み込む
+  useEffect(() => {
+    // ログインしていないときは何もしない
+    if (!firebaseUser) return;
+
+    const loadUserDoc = async () => {
+      try {
+        const ref = doc(db, "studyPlannerUsers", firebaseUser.uid);
+        const snap = await getDoc(ref);
+
+        if (snap.exists()) {
+          // 既存ユーザー → Firestore のデータで上書き
+          const data = snap.data() as any;
+
+          if (data.entries)   setEntries(data.entries);
+          if (data.goals)     setGoals(data.goals);
+          if (data.userName)  setUserName(data.userName);
+          if (data.friends)   setFriends(data.friends);
+        } else {
+          // 初回ログインユーザー → 現在のローカル状態でドキュメントを作成
+          await setDoc(ref, {
+            userName,
+            entries,
+            goals,
+            friends,
+            updatedAt: Date.now(),
+          });
+        }
+
+        setHasLoadedFromFirestore(true);
+      } catch (e) {
+        console.error("Firestore 読み込みエラー:", e);
+      }
+    };
+
+    loadUserDoc();
+  }, [firebaseUser, db]);
+
+  
   // --- Persistence & Sync Logic ---
   
   // Entries Persistence
@@ -280,6 +394,49 @@ const App = () => {
   useEffect(() => {
     localStorage.setItem('study-planner-friends', JSON.stringify(friends));
   }, [friends]);
+
+  // 🔽 8-4: ログイン中 & Firestore 初期ロード済みなら、変更を Firestore に同期
+  useEffect(() => {
+    // 条件1: ログインしていないなら何もしない
+    if (!firebaseUser) return;
+    // 条件2: Firestore からまだ初回ロードが終わっていない間は書き込まない（上書き事故防止）
+    if (!hasLoadedFromFirestore) return;
+    // 条件3: オフラインのときは書かない（オンライン復帰時に最新状態で発火する）
+    if (!isOnline) return;
+
+    const ref = doc(db, "studyPlannerUsers", firebaseUser.uid);
+
+    const save = async () => {
+      try {
+        await setDoc(
+          ref,
+          {
+            userName,
+            entries,
+            goals,
+            friends,
+            updatedAt: Date.now(),
+          },
+          { merge: true } // 一部だけ更新してもOKなように merge
+        );
+        // 必要ならここでクラウド保存完了トーストを出しても良い
+      } catch (e) {
+        console.error("Firestore 書き込みエラー:", e);
+      }
+    };
+
+    save();
+  }, [
+    firebaseUser,
+    hasLoadedFromFirestore,
+    isOnline,
+    userName,
+    entries,
+    goals,
+    friends,
+    db,
+  ]);
+
 
   // --- Screen Wake Lock Logic ---
   useEffect(() => {
@@ -564,14 +721,20 @@ const App = () => {
         </div>
       )}
 
-      {/* Header */}
+           {/* Header */}
       <header className="bg-indigo-700 text-white p-4 shadow-lg sticky top-0 z-20">
         <div className="max-w-5xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4 md:gap-0">
           <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveTab('home')}>
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold">定期考査学習管理 <span className="text-xs font-normal opacity-80 ml-2">11/27~12/9</span></h1>
+            <h1 className="text-xl font-bold">
+              定期考査学習管理{" "}
+              <span className="text-xs font-normal opacity-80 ml-2">11/27~12/9</span>
+            </h1>
           </div>
-          <div className="flex items-center space-x-2">
+
+          {/* 右側：タブ＋ステータス＋ログインボタン */}
+          <div className="flex items-center space-x-3">
+            {/* タブ群（元のまま） */}
             <div className="flex space-x-1 overflow-x-auto w-full md:w-auto pb-2 md:pb-0 scrollbar-hide">
               <button 
                 onClick={() => setActiveTab('home')}
@@ -624,10 +787,32 @@ const App = () => {
                 <span>AIコーチ</span>
               </button>
             </div>
-            
-            {/* Status Icon */}
-            <div className="hidden md:flex items-center justify-center w-8 h-8 rounded-full bg-indigo-800" title={isOnline ? "オンライン" : "オフライン (キュー保存中)"}>
-              {isOnline ? <Wifi className="w-4 h-4 text-emerald-400" /> : <WifiOff className="w-4 h-4 text-slate-400" />}
+
+            {/* ステータスアイコン ＋ ログインボタン */}
+            <div className="flex items-center space-x-2">
+              {/* オンライン／オフライン表示 */}
+              <div
+                className="hidden md:flex items-center justify-center w-8 h-8 rounded-full bg-indigo-800"
+                title={isOnline ? "オンライン" : "オフライン (キュー保存中)"}
+              >
+                {isOnline ? (
+                  <Wifi className="w-4 h-4 text-emerald-400" />
+                ) : (
+                  <WifiOff className="w-4 h-4 text-slate-400" />
+                )}
+              </div>
+
+              {/* ログイン／ログアウトボタン */}
+              <button
+                onClick={firebaseUser ? handleLogout : handleLogin}
+                className="px-3 py-1.5 rounded-full text-xs font-bold bg-white text-indigo-700 hover:bg-slate-100 transition whitespace-nowrap"
+              >
+                {authLoading
+                  ? "確認中..."
+                  : firebaseUser
+                    ? `${firebaseUser.displayName || "ログイン中"} / ログアウト`
+                    : "Googleでログイン"}
+              </button>
             </div>
           </div>
         </div>
