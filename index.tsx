@@ -1149,17 +1149,16 @@ const TopView: React.FC<DaySectionProps> = ({
         ) : (
           <div className="text-center py-8">
             <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-300">
-               <Clock className="w-10 h-10" />
+              <Clock className="w-10 h-10" />
             </div>
             <h3 className="text-xl font-bold text-slate-700 mb-2">学習を開始しましょう</h3>
-            <p className="text-slate-500 text-sm mb-6">下のリストからタスクを選んで再生ボタンを押すか、<br/>新しい計画を追加してください。</p>
-            <button 
-              onClick={onAdd}
-              className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-bold shadow-lg hover:bg-indigo-700 transition flex items-center mx-auto"
-            >
-              <Plus className="w-5 h-5 mr-2" />
-              新しい計画を追加
-            </button>
+            <p className="text-slate-500 text-sm">
+              下の「本日の計画リスト」から
+              <span className="font-semibold"> ＋ボタン</span>
+              で計画を追加し、
+              <br />
+              必要なタスクの再生ボタンで時間を計測できます。
+            </p>
           </div>
         )}
       </div>
