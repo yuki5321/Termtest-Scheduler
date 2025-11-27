@@ -59,7 +59,10 @@ import {
   doc,
   getDoc,
   setDoc,
+  collection,
+  getDocs,
 } from "firebase/firestore";
+
 import { getAnalytics } from "firebase/analytics";
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -82,6 +85,13 @@ const analytics = getAnalytics(app);
 // 👇 これを忘れると auth が undefined のままになる
 export const auth = getAuth(app);
 export const db = getFirestore(app);
+
+// index.tsx の上の方（Appコンポーネントの外）に追記
+const ADMIN_EMAILS = [
+  "y.takeuchi1104@gmail.com",
+  // 必要なら複数追加
+];
+
 
 // --- Constants ---
 
@@ -222,6 +232,7 @@ const App = () => {
   const [authLoading, setAuthLoading] = useState(true);
   // 🔽 追加：Firestore からの初回ロードが終わったかどうか
   const [hasLoadedFromFirestore, setHasLoadedFromFirestore] = useState(false);
+  const isAdmin = !!firebaseUser && ADMIN_EMAILS.includes(firebaseUser.email ?? "");
 
   const handleLogin = async () => {
     try {
@@ -285,7 +296,7 @@ const App = () => {
     return saved ? JSON.parse(saved) : [];
   });
 
-  const [activeTab, setActiveTab] = useState<'home' | 'goals' | 'plan' | 'stats' | 'analyze' | 'group'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'goals' | 'plan' | 'stats' | 'analyze' | 'group' | 'admin'>('home');
   const [showAiModal, setShowAiModal] = useState(false);
   const [aiAdvice, setAiAdvice] = useState<string>("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -788,6 +799,19 @@ const App = () => {
                 <ScanEye className="w-4 h-4" />
                 <span>画像分析</span>
               </button>
+              {isAdmin && (
+                <button 
+                  onClick={() => setActiveTab('admin' as any)}
+                  className={`flex items-center space-x-1 px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition ${
+                    activeTab === 'admin'
+                      ? 'bg-white text-indigo-700'
+                      : 'bg-indigo-600 text-white hover:bg-indigo-500'
+                  }`}
+                >
+                  <BarChart3 className="w-4 h-4" />
+                  <span>管理者ビュー</span>
+                </button>
+              )}
               <div className="w-px h-6 bg-indigo-500 mx-1 hidden md:block"></div>
               <button
                 onClick={getAiAdvice}
@@ -910,6 +934,9 @@ const App = () => {
 
         {activeTab === 'analyze' && (
           <ImageAnalysisView />
+        )}
+        {activeTab === 'admin' && isAdmin && (
+          <AdminView />
         )}
       </main>
 
@@ -1984,6 +2011,137 @@ const GroupView = ({
     </div>
   );
 };
+
+interface AdminUserSummary {
+  id: string;
+  name: string;
+  totalPlanned: number;
+  totalActual: number;
+  updatedAt: number;
+}
+
+const AdminView: React.FC = () => {
+  const [users, setUsers] = useState<AdminUserSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchAllUsers = async () => {
+      try {
+        const snap = await getDocs(collection(db, "studyPlannerUsers"));
+        const list: AdminUserSummary[] = snap.docs.map((docSnap) => {
+          const d = docSnap.data() as any;
+          const entries: any[] = d.entries || [];
+
+          const totalPlanned = entries.reduce(
+            (acc, e) => acc + (e.plannedMinutes ?? 0),
+            0
+          );
+          const totalActual = entries.reduce(
+            (acc, e) => acc + (e.actualMinutes ?? 0),
+            0
+          );
+
+          return {
+            id: docSnap.id,
+            name: d.userName || "名前未設定",
+            totalPlanned,
+            totalActual,
+            updatedAt: d.updatedAt || 0,
+          };
+        });
+
+        // 学習時間の多い順にソート
+        list.sort((a, b) => b.totalActual - a.totalActual);
+        setUsers(list);
+      } catch (e) {
+        console.error("AdminView Firestore 読み込みエラー:", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAllUsers();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        <p className="text-sm text-slate-500">読み込み中...</p>
+      </div>
+    );
+  }
+
+  if (users.length === 0) {
+    return (
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        <p className="text-sm text-slate-500">まだ学習データが登録されているユーザーがいません。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center">
+          <BarChart3 className="w-5 h-5 mr-2 text-indigo-600" />
+          クラス全体の学習状況（管理者用）
+        </h3>
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="bg-slate-50 text-slate-500">
+                <th className="px-3 py-2 text-left">順位</th>
+                <th className="px-3 py-2 text-left">名前</th>
+                <th className="px-3 py-2 text-right">実績時間 (h)</th>
+                <th className="px-3 py-2 text-right">予定時間 (h)</th>
+                <th className="px-3 py-2 text-right">達成率</th>
+                <th className="px-3 py-2 text-right">最終更新</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u, idx) => {
+                const rate =
+                  u.totalPlanned > 0
+                    ? Math.round((u.totalActual / u.totalPlanned) * 100)
+                    : 0;
+
+                return (
+                  <tr
+                    key={u.id}
+                    className="border-b border-slate-100 hover:bg-slate-50"
+                  >
+                    <td className="px-3 py-2">{idx + 1}</td>
+                    <td className="px-3 py-2 font-medium">{u.name}</td>
+                    <td className="px-3 py-2 text-right">
+                      {(u.totalActual / 60).toFixed(1)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {(u.totalPlanned / 60).toFixed(1)}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {u.totalPlanned > 0 ? `${rate}%` : "-"}
+                    </td>
+                    <td className="px-3 py-2 text-right text-xs text-slate-400">
+                      {u.updatedAt
+                        ? new Date(u.updatedAt).toLocaleString()
+                        : "-"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="mt-3 text-xs text-slate-400">
+          ※ このビューは管理者メールアドレスでログインした場合のみ表示されます。
+        </p>
+      </div>
+    </div>
+  );
+};
+
 
 // --- Image Analysis Component ---
 
