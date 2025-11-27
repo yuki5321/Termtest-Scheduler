@@ -1821,39 +1821,49 @@ const ImageAnalysisView = () => {
   };
 
   const analyzeImage = async () => {
-    if (!selectedImage || !GEMINI_API_KEY) return;
+  if (!selectedImage) return;
 
-    setLoading(true);
-    try {
-      const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-      // Extract base64 data from data URL
-      const base64Data = selectedImage.split(',')[1];
+  if (!GEMINI_API_KEY) {
+    setResult("APIキーが設定されていません。環境変数 VITE_GEMINI_API_KEY を確認してください。");
+    return;
+  }
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        contents: {
+  setLoading(true);
+  try {
+    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+
+    // "data:image/png;base64,XXXX" のカンマ以降だけを取り出す
+    const base64Data = (selectedImage.split(',')[1] || '').trim();
+
+    const response = await ai.models.generateContent({
+      // 安定版モデルに変更（必要なら 2.5 flash に差し替え可）
+      model: 'gemini-3-pro-preview',
+      contents: [
+        {
+          role: 'user',
           parts: [
             {
               inlineData: {
                 mimeType: mimeType,
-                data: base64Data
-              }
+                data: base64Data,
+              },
             },
             {
-              text: prompt
-            }
-          ]
-        }
-      });
+              text: prompt,
+            },
+          ],
+        },
+      ],
+    });
 
-      setResult(response.text || "解説を生成できませんでした。");
-    } catch (error) {
-      console.error("Error analyzing image:", error);
-      setResult("エラーが発生しました。もう一度お試しください。");
-    } finally {
-      setLoading(false);
-    }
-  };
+    setResult(response.text || "解説を生成できませんでした。");
+  } catch (error) {
+    console.error("Error analyzing image:", error);
+    setResult("エラーが発生しました。もう一度お試しください。");
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
