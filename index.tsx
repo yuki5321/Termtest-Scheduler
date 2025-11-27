@@ -40,25 +40,31 @@ import {
   CloudOff
 } from 'lucide-react';
 
-// 🔽 このブロックを追加（バージョン番号は揃えてください）
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js";
+// ここから下の CDN import は全部消す
+// import { initializeApp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js";
+// import { ... } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js";
+// import { ... } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+
+// 代わりに npm 版で統一
+import { initializeApp } from "firebase/app";
 import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
   onAuthStateChanged,
-  signOut
-} from "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js";
+  signOut,
+} from "firebase/auth";
 import {
   getFirestore,
   doc,
   getDoc,
-  setDoc
-} from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+  setDoc,
+} from "firebase/firestore";
+import { getAnalytics } from "firebase/analytics";
+
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 // Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyDAi3fYPBaEoP0TBckL9Fw2OrKZTQoGZbs",
   authDomain: "termtest-scheduler.firebaseapp.com",
@@ -69,11 +75,14 @@ const firebaseConfig = {
   measurementId: "G-5H1TLBM914"
 };
 
-// Initialize Firebase
+// Initialize Firebase (一回だけ)
 const app = initializeApp(firebaseConfig);
-// 🔽 ここを追加
-const auth = getAuth(app);
-const db   = getFirestore(app);
+const analytics = getAnalytics(app);
+
+// 👇 これを忘れると auth が undefined のままになる
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+
 // --- Constants ---
 
 const SUBJECTS = [
@@ -213,14 +222,15 @@ const App = () => {
   const [authLoading, setAuthLoading] = useState(true);
   // 🔽 追加：Firestore からの初回ロードが終わったかどうか
   const [hasLoadedFromFirestore, setHasLoadedFromFirestore] = useState(false);
+
   const handleLogin = async () => {
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
       // 成功すると onAuthStateChanged が発火して firebaseUser がセットされる
-    } catch (err) {
-      console.error(err);
-      alert("ログインに失敗しました。もう一度試してください。");
+    } catch (err: any) {
+      console.error("login error:", err);
+      alert(`ログインに失敗しました: ${err.code || err.message || '不明なエラー'}`);
     }
   };
 
